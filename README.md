@@ -60,27 +60,34 @@ If you prefer manual configuration, add this to `~/.claude/settings.json` (it's 
 ```json
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }]
+      }
+    ],
     "PreToolUse": [
       {
-        "hooks": [{ "type": "command", "command": "/path/to/cc-light/hooks/cc-light-hook.sh busy" }]
+        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }]
       }
     ],
     "Notification": [
       {
         "matcher": "idle_prompt|permission_prompt",
-        "hooks": [{ "type": "command", "command": "/path/to/cc-light/hooks/cc-light-hook.sh waiting" }]
+        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh waiting || true" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "/path/to/cc-light/hooks/cc-light-hook.sh idle" }]
+        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh idle || true" }]
       }
     ]
   }
 }
 ```
 
-The hook script uses `python3` (built into macOS) to parse the JSON stdin robustly — it does not require `jq`.
+The `[ -x ... ] && ... || true` wrapper makes each hook a silent no-op if the script is missing — so uninstalling cc-light without cleaning `settings.json` doesn't spam "command not found" on every Claude Code action. The `UserPromptSubmit` hook is what turns the light red the moment you send a message (otherwise pure-text turns that don't call any tools would leave the light green until the response finishes).
+
+The hook script itself uses `python3` (built into macOS) to parse the JSON stdin robustly — it does not require `jq`.
 
 ## Requirements
 

@@ -57,10 +57,11 @@ echo "  → Configuring Claude Code hooks..."
 
 mkdir -p "$(dirname "$SETTINGS_FILE")"
 python3 - "$SETTINGS_FILE" "$HOOK_CMD" <<'PYEOF'
-import json, os, sys
+import json, os, shlex, sys
 
 settings_path = sys.argv[1]
-hook_cmd      = sys.argv[2]
+hook_path     = sys.argv[2]
+hook_cmd      = shlex.quote(hook_path)  # shell-safe even if path has spaces
 
 existing = {}
 if os.path.exists(settings_path) and os.path.getsize(settings_path) > 0:
@@ -69,31 +70,55 @@ if os.path.exists(settings_path) and os.path.getsize(settings_path) > 0:
             existing = json.load(f)
     except Exception as e:
         print(f"  ⚠️  Could not parse {settings_path}: {e}")
-        print("     Backing it up to {path}.bak and starting fresh.")
+        print(f"     Backing it up to {settings_path}.bak and starting fresh.")
         os.rename(settings_path, settings_path + ".bak")
         existing = {}
 
 hooks = existing.setdefault("hooks", {})
 
-def has_command(arr, cmd):
+def strip_legacy(arr, bare):
+    """Drop hook entries that point to `bare` without a guard prefix.
+    Older versions of install.sh registered the hook command directly
+    (e.g. '/path/to/cc-light-hook.sh busy'); we don't want to leave
+    those around alongside the new guarded form."""
+    out = []
     for entry in arr:
-        for h in entry.get("hooks", []):
-            if h.get("command") == cmd:
-                return True
-    return False
+        kept = [h for h in entry.get("hooks", [])
+                if h.get("command") != bare
+                and not h.get("command", "").startswith(bare + " ")]
+        if kept:
+            out.append({**entry, "hooks": kept})
+    return out
 
-def add(event, matcher, cmd):
+def guarded(arg):
+    # [ -x path ] && path arg || true  —  if the hook script is missing
+    # the guard short-circuits and the command exits 0 with no output,
+    # so uninstalled-but-not-cleaned hooks don't spam "command not found".
+    return f"[ -x {hook_cmd} ] && {hook_cmd} {arg} || true"
+
+def has_command(arr, cmd):
+    return any(h.get("command") == cmd
+               for entry in arr
+               for h in entry.get("hooks", []))
+
+def add(event, matcher, arg):
     arr = hooks.setdefault(event, [])
-    if has_command(arr, cmd):
-        return
-    entry = {"hooks": [{"type": "command", "command": cmd}]}
-    if matcher:
-        entry["matcher"] = matcher
-    arr.append(entry)
+    arr = strip_legacy(arr, hook_path)
+    cmd = guarded(arg)
+    if not has_command(arr, cmd):
+        entry = {"hooks": [{"type": "command", "command": cmd}]}
+        if matcher:
+            entry["matcher"] = matcher
+        arr.append(entry)
+    hooks[event] = arr
 
-add("PreToolUse",  None,                            f"{hook_cmd} busy")
-add("Notification","idle_prompt|permission_prompt", f"{hook_cmd} waiting")
-add("Stop",        None,                            f"{hook_cmd} idle")
+# UserPromptSubmit fires the moment the user submits a prompt, so the
+# light goes red even on turns that don't call any tools (i.e. pure
+# model output, which has no observable hook otherwise).
+add("UserPromptSubmit", None,                            "busy")
+add("PreToolUse",       None,                            "busy")
+add("Notification",     "idle_prompt|permission_prompt", "waiting")
+add("Stop",             None,                            "idle")
 
 with open(settings_path, "w") as f:
     json.dump(existing, f, indent=2)
