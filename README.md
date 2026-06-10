@@ -53,6 +53,17 @@ Claude Code hooks  ──►  cc-light-hook.sh <state>
 
 **Hook events covered** (each one updates state):
 
+| State | Hook events |
+|-------|-------------|
+| 🔴 busy | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `MessageDisplay`, `WorktreeCreate`, `WorktreeRemove` |
+| 🟡 waiting | `PermissionRequest` (🔒), `Notification` with `notification_type=idle_prompt` (💬) |
+| 🟢 idle | `Stop`, `StopFailure` |
+
+`SessionEnd` additionally deletes the session's state file outright so a closed Claude Code session doesn't linger forever in the menu.
+
+<details>
+<summary>Per-event rationale</summary>
+
 | Event | State | Why |
 |-------|-------|-----|
 | `UserPromptSubmit` | busy | Light goes red the moment you send a message — covers pure-text turns that don't call tools |
@@ -68,6 +79,8 @@ Claude Code hooks  ──►  cc-light-hook.sh <state>
 | `Notification` (idle_prompt) | waitingInput | Claude is idle waiting for your next message — 💬 in the menu |
 | `Stop` / `StopFailure` | idle | Claude finished its turn (or failed out of it) |
 | `SessionEnd` | (delete file) | User closed Claude Code — clean up the session's state file. Combined with the stale-filter exemption for waiting states below, this means waiting sessions stay visible until either Claude Code is closed or you handle the prompt. |
+
+</details>
 
 The menu shows e.g.:
 
