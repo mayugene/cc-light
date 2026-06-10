@@ -45,7 +45,13 @@ EOF
 
 echo "  → Installed app to $APP_BUNDLE"
 
-# 3. Initialize state directory
+# 3. Initialize state directory.
+#    Clear stale per-session files from previous installs so the menu
+#    doesn't start with a graveyard of zombie sessions; the app's own
+#    30s stale-threshold would filter them out of the icon, but the
+#    files would still sit on disk. Active sessions will rewrite
+#    their own files within seconds of the new app starting.
+rm -f "$STATE_DIR"/*.json
 mkdir -p "$STATE_DIR"
 echo '{"state":"idle","session_id":"","cwd":"","transcript_path":"","ts":0}' \
   > "$STATE_DIR/_default.json"
@@ -90,6 +96,19 @@ def strip_legacy(arr, bare):
             out.append({**entry, "hooks": kept})
     return out
 
+def is_cc_light_entry(entry):
+    """True if this entry was placed by a previous install.sh — matched
+    by command containing the hook script path. Used to wipe our own
+    entries before re-adding so matcher changes don't accumulate."""
+    return any(hook_path in h.get("command", "")
+               for h in entry.get("hooks", []))
+
+def reset_event(event):
+    """Remove all cc-light entries from this event, leaving user-installed
+    hooks (e.g. rtk hook claude) intact. Re-run safe."""
+    if event in hooks:
+        hooks[event] = [e for e in hooks[event] if not is_cc_light_entry(e)]
+
 def guarded(arg):
     # [ -x path ] && path arg || true  —  if the hook script is missing
     # the guard short-circuits and the command exits 0 with no output,
@@ -103,7 +122,8 @@ def has_command(arr, cmd):
 
 def add(event, matcher, arg):
     arr = hooks.setdefault(event, [])
-    arr = strip_legacy(arr, hook_path)
+    reset_event(event)  # wipe our own entry first — matcher may have changed
+    arr = hooks[event]
     cmd = guarded(arg)
     if not has_command(arr, cmd):
         entry = {"hooks": [{"type": "command", "command": cmd}]}
@@ -112,13 +132,37 @@ def add(event, matcher, arg):
         arr.append(entry)
     hooks[event] = arr
 
-# UserPromptSubmit fires the moment the user submits a prompt, so the
-# light goes red even on turns that don't call any tools (i.e. pure
-# model output, which has no observable hook otherwise).
-add("UserPromptSubmit", None,                            "busy")
-add("PreToolUse",       None,                            "busy")
-add("Notification",     "idle_prompt|permission_prompt", "waiting")
-add("Stop",             None,                            "idle")
+# Busy hooks: every event that means "Claude is still working". The more
+# events we cover, the longer the red light stays alive between events
+# (the app drops sessions older than 5min). Pure thinking / pure text
+# generation in Claude Code is a black box to hooks — no event fires
+# during model output — so we need to cover every "Claude did something"
+# hook to keep the busy state fresh.
+add("UserPromptSubmit",   None,             "busy")
+add("PreToolUse",         None,             "busy")
+add("PostToolUse",        None,             "busy")
+add("PostToolUseFailure", None,             "busy")
+add("PostToolBatch",      None,             "busy")
+add("SubagentStart",      None,             "busy")
+add("SubagentStop",       None,             "busy")
+add("TaskCreated",        None,             "busy")
+add("TaskCompleted",      None,             "busy")
+add("MessageDisplay",     None,             "busy")
+add("WorktreeCreate",     None,             "busy")
+add("WorktreeRemove",     None,             "busy")
+# PermissionRequest is a separate event (not a Notification variant) — it
+# fires when Claude needs you to allow a tool. Distinguishing it from
+# idle_prompt lets the menu show what kind of attention is needed.
+add("PermissionRequest",  None,             "waitingPermission")
+# Notification still carries idle_prompt (Claude finished and is sitting
+# idle waiting for your next message). permission_prompt was removed from
+# the matcher because it's handled by PermissionRequest above.
+add("Notification",       "idle_prompt",    "waitingInput")
+# Stop fires when Claude finishes its turn normally; StopFailure fires
+# when the turn ended with an error (rate limit, overload, etc.) — either
+# way the round is over, the light goes back to idle.
+add("Stop",               None,             "idle")
+add("StopFailure",        None,             "idle")
 
 with open(settings_path, "w") as f:
     json.dump(existing, f, indent=2)

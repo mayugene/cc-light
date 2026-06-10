@@ -3,7 +3,7 @@ set -e
 
 APP_BUNDLE="$HOME/Applications/cc-light.app"
 SETTINGS_FILE="$HOME/.claude/settings.json"
-STATE_FILE="/tmp/cc-light-state.json"
+STATE_DIR="/tmp/cc-light"
 
 echo "🚦 Uninstalling cc-light..."
 
@@ -16,9 +16,9 @@ if [ -d "$APP_BUNDLE" ]; then
     echo "  → Removed $APP_BUNDLE"
 fi
 
-# Remove state file
-rm -f "$STATE_FILE"
-echo "  → Removed state file"
+# Remove state directory (per-session JSON files written by the hooks)
+rm -rf "$STATE_DIR"
+echo "  → Removed $STATE_DIR"
 
 echo ""
 echo "✅ cc-light removed."

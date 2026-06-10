@@ -2,18 +2,19 @@
 
 A macOS menu bar traffic light for Claude Code — see your session state at a glance.
 
-| Color | Meaning |
-|-------|---------|
-| 🟢 Green | Idle — task complete, ready for input |
-| 🟡 Yellow (blinking) | Waiting for user confirmation |
-| 🔴 Red | Busy — Claude is working |
+| Color | Glyph | Meaning |
+|-------|-------|---------|
+| 🟢 Green | 🟢 | Idle — task complete, ready for input |
+| 🟡 Yellow | 💬 | Waiting for input — Claude is sitting idle waiting for your next message |
+| 🟡 Yellow | 🔒 | Waiting for permission — a tool call needs your authorization |
+| 🔴 Red | 🔴 | Busy — Claude is working |
 
 ![demo](./demo.gif)
 
 The same hooks are used by every Claude Code client on this machine — the CLI, the VSCode extension, and the JetBrains plugins (IDEA, GoLand, PyCharm, …). Each session's state is tracked in its own file under `/tmp/cc-light/`, so sessions are independent; the menu bar icon is just an aggregate of the highest-priority state across them.
 
 The aggregate priority is **yellow > green > red**:
-- **🟡 waiting** — at least one session needs your input; the menu bar goes yellow
+- **🟡 waiting** — at least one session needs your input; the menu bar goes yellow (the dropdown distinguishes 💬 input vs 🔒 permission)
 - **🟢 idle** — otherwise, if any session is sitting idle, all clear
 - **🔴 busy** — every session is busy (Claude is working, no action needed from you)
 
@@ -29,7 +30,7 @@ cd cc-light
 
 This will:
 1. Build the native macOS menu bar app
-2. Install Claude Code hooks (deep-merged into your existing `~/.claude/settings.json` if one exists; safe to re-run)
+2. Install Claude Code hooks (deep-merged into your existing `~/.claude/settings.json` if one exists; safe to re-run). On re-run, stale `/tmp/cc-light/*.json` files are cleared so the menu doesn't start with leftover zombie sessions.
 3. Launch cc-light in your menu bar
 
 ## How It Works
@@ -44,29 +45,47 @@ Claude Code hooks  ──►  cc-light-hook.sh <state>
                            ▼
                   cc-light menu bar app
                   (polls /tmp/cc-light every 0.5s,
-                   drops entries older than 30s,
+                   drops entries older than 5min,
                    shows highest-priority emoji,
                    lists each session with its project name)
 ```
 
+**Hook events covered** (each one updates state):
+
+| Event | State | Why |
+|-------|-------|-----|
+| `UserPromptSubmit` | busy | Light goes red the moment you send a message — covers pure-text turns that don't call tools |
+| `PreToolUse` | busy | Claude is about to call a tool |
+| `PostToolUse` | busy | Tool finished; Claude is still in the same turn |
+| `PostToolUseFailure` | busy | Tool failed but the turn isn't over yet |
+| `PostToolBatch` | busy | Batch tool dispatch |
+| `SubagentStart` / `SubagentStop` | busy | Subagent lifecycle (parent is still working) |
+| `TaskCreated` / `TaskCompleted` | busy | Task system events |
+| `MessageDisplay` | busy | **Fires for every batch of streamed assistant text** — the only hook that ticks during Claude's pure-text generation phase (the "thinking / generating / incubating" states), so the red light stays alive through long messages |
+| `WorktreeCreate` / `WorktreeRemove` | busy | Git worktree operations |
+| `PermissionRequest` | waitingPermission | A tool needs your authorization — 🔒 in the menu |
+| `Notification` (idle_prompt) | waitingInput | Claude is idle waiting for your next message — 💬 in the menu |
+| `Stop` / `StopFailure` | idle | Claude finished its turn (or failed out of it) |
+
 The menu shows e.g.:
 
 ```
-2 waiting for input
+1 waiting for permission
 ─────────
-🟡  foo      —  abc12345
-🟡  bar      —  def67890
+🔒  cc-light       —  34574b6f
 ─────────
-1 busy · 2 idle
+1 waiting for input
 ─────────
-🔴  baz      —  ghi11111
-🟢  qux      —  jkl22222
-🟢  zap      —  mno33333
+💬  tracker-tool-flutter  —  32f753f9
+─────────
+1 busy
+─────────
+🔴  observer-sessions  —  f5683b79
 ─────────
 Quit                              ⌘Q
 ```
 
-Sessions in the `waiting` state are always listed first under their own header so you can see at a glance which project needs your input, even if other projects are busy or idle.
+`waitingPermission` is shown first because permission prompts block your work; `waitingInput` is next; everything else (busy/idle) follows.
 
 ## Manual Setup
 
@@ -75,32 +94,27 @@ If you prefer manual configuration, add this to `~/.claude/settings.json` (it's 
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "idle_prompt|permission_prompt",
-        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh waiting || true" }]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh idle || true" }]
-      }
-    ]
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "PreToolUse":         [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "PostToolUse":        [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "PostToolBatch":      [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "SubagentStart":      [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "SubagentStop":       [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "TaskCreated":        [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "TaskCompleted":      [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "MessageDisplay":     [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "WorktreeCreate":     [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "WorktreeRemove":     [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh busy || true" }] }],
+    "PermissionRequest":  [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh waitingPermission || true" }] }],
+    "Notification":       [{ "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh waitingInput || true" }] }],
+    "Stop":               [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh idle || true" }] }],
+    "StopFailure":        [{ "hooks": [{ "type": "command", "command": "[ -x /path/to/cc-light/hooks/cc-light-hook.sh ] && /path/to/cc-light/hooks/cc-light-hook.sh idle || true" }] }]
   }
 }
 ```
 
-The `[ -x ... ] && ... || true` wrapper makes each hook a silent no-op if the script is missing — so uninstalling cc-light without cleaning `settings.json` doesn't spam "command not found" on every Claude Code action. The `UserPromptSubmit` hook is what turns the light red the moment you send a message (otherwise pure-text turns that don't call any tools would leave the light green until the response finishes).
+The `[ -x ... ] && ... || true` wrapper makes each hook a silent no-op if the script is missing — so uninstalling cc-light without cleaning `settings.json` doesn't spam "command not found" on every Claude Code action. The `UserPromptSubmit` hook is what turns the light red the moment you send a message (otherwise pure-text turns that don't call any tools would leave the light green until the response finishes). `MessageDisplay` is the only hook that fires while Claude is generating text (the "thinking / spinning / generating" UI states), so it's what keeps the red light alive during long streaming responses.
 
 The hook script itself uses `python3` (built into macOS) to parse the JSON stdin robustly — it does not require `jq`.
 
@@ -116,7 +130,7 @@ The hook script itself uses `python3` (built into macOS) to parse the JSON stdin
 ./uninstall.sh
 ```
 
-This removes the `.app` bundle and the `/tmp/cc-light` state files. The hooks in `~/.claude/settings.json` are **not** removed — edit the file manually to clean them up.
+This removes the `.app` bundle and the entire `/tmp/cc-light` directory. The hooks in `~/.claude/settings.json` are **not** removed — edit the file manually to clean them up.
 
 ## License
 
