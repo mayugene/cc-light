@@ -36,6 +36,18 @@ cwd            = hook_input.get("cwd") or ""
 transcript     = hook_input.get("transcript_path") or ""
 
 key = session_id or "_default"
+path = os.path.join(state_dir, key + ".json")
+
+# SessionEnd and similar cleanup states: delete the per-session file
+# entirely. The Swift app's stale filter exempts waiting states, so
+# without this they'd linger forever after a clean exit.
+if state_arg == "ended":
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    sys.exit(0)
+
 state = {
     "state":           state_arg,
     "session_id":      session_id,
@@ -44,7 +56,6 @@ state = {
     "ts":              int(time.time()),
 }
 
-path = os.path.join(state_dir, key + ".json")
 with open(path, "w") as f:
     json.dump(state, f)
 PYEOF

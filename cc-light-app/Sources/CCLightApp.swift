@@ -109,7 +109,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let path = "\(stateDir)/\(file)"
             guard let data = fm.contents(atPath: path),
                   let s = try? JSONDecoder().decode(SessionState.self, from: data) else { continue }
-            if let ts = s.ts, now.timeIntervalSince(Date(timeIntervalSince1970: Double(ts))) > staleThreshold { continue }
+            // Waiting states are exempt from stale filtering — they mean
+            // "Claude is sitting idle waiting for you to act", which is
+            // only useful while still visible. Idle/busy still expire
+            // after `staleThreshold` to clear crashed sessions.
+            if s.state != .waitingInput && s.state != .waitingPermission,
+               let ts = s.ts,
+               now.timeIntervalSince(Date(timeIntervalSince1970: Double(ts))) > staleThreshold {
+                continue
+            }
             results.append(s)
         }
 

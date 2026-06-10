@@ -45,7 +45,8 @@ Claude Code hooks  ──►  cc-light-hook.sh <state>
                            ▼
                   cc-light menu bar app
                   (polls /tmp/cc-light every 0.5s,
-                   drops entries older than 5min,
+                   drops busy/idle entries older than 5min,
+                   keeps waiting entries until SessionEnd,
                    shows highest-priority emoji,
                    lists each session with its project name)
 ```
@@ -66,6 +67,7 @@ Claude Code hooks  ──►  cc-light-hook.sh <state>
 | `PermissionRequest` | waitingPermission | A tool needs your authorization — 🔒 in the menu |
 | `Notification` (idle_prompt) | waitingInput | Claude is idle waiting for your next message — 💬 in the menu |
 | `Stop` / `StopFailure` | idle | Claude finished its turn (or failed out of it) |
+| `SessionEnd` | (delete file) | User closed Claude Code — clean up the session's state file. Combined with the stale-filter exemption for waiting states below, this means waiting sessions stay visible until either Claude Code is closed or you handle the prompt. |
 
 The menu shows e.g.:
 

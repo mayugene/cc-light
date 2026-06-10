@@ -163,6 +163,11 @@ add("Notification",       "idle_prompt",    "waitingInput")
 # way the round is over, the light goes back to idle.
 add("Stop",               None,             "idle")
 add("StopFailure",        None,             "idle")
+# SessionEnd means the user closed Claude Code entirely (or it exited
+# on its own). Delete this session's state file outright — the Swift
+# app exempts waiting states from the stale filter so they'd otherwise
+# linger forever after a clean exit.
+add("SessionEnd",         None,             "ended")
 
 with open(settings_path, "w") as f:
     json.dump(existing, f, indent=2)
