@@ -21,11 +21,17 @@ enum CCState: String, Codable {
         }
     }
 
+    /// Priority for the menu-bar icon and menu ordering.
+    /// `waiting > idle > busy`:
+    ///   - waiting: I need the user — show this first so they don't miss it
+    ///   - idle:    nothing is happening — all clear
+    ///   - busy:    Claude is working — no action needed from the user
+    /// Among "no-action-needed" states, all-clear beats in-progress.
     var priority: Int {
         switch self {
-        case .busy: return 2
-        case .waiting: return 1
-        case .idle: return 0
+        case .waiting: return 2
+        case .idle:    return 1
+        case .busy:    return 0
         }
     }
 }
@@ -87,16 +93,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             results.append(s)
         }
 
-        // Highest-priority state first, then by project name for stable ordering.
+        // Highest-priority state first (waiting > idle > busy), then by
+        // project name for stable ordering.
         sessions = results.sorted {
             if $0.state.priority != $1.state.priority { return $0.state.priority > $1.state.priority }
             return $0.projectName < $1.projectName
         }
 
-        let agg: CCState
-        if sessions.contains(where: { $0.state == .busy }) { agg = .busy }
-        else if sessions.contains(where: { $0.state == .waiting }) { agg = .waiting }
-        else { agg = .idle }
+        // Aggregate: pick the highest-priority state across all sessions.
+        // Empty → idle (green). All busy → busy (red). Any waiting → waiting (yellow).
+        let agg: CCState = sessions.map { $0.state }.max(by: { $0.priority < $1.priority }) ?? .idle
 
         DispatchQueue.main.async {
             self.statusItem.button?.title = agg.emoji
@@ -110,19 +116,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if sessions.isEmpty {
             menu.addItem(NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: ""))
         } else {
-            // Per-state summary across all sessions.
-            let busyCount = sessions.filter { $0.state == .busy }.count
-            let waitingCount = sessions.filter { $0.state == .waiting }.count
-            let idleCount = sessions.filter { $0.state == .idle }.count
-            let summary = "\(busyCount) busy · \(waitingCount) waiting · \(idleCount) idle"
-            let header = NSMenuItem(title: summary, action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-            menu.addItem(.separator())
+            // Split waiting into its own "needs your attention" section at the
+            // top, since the whole point of the yellow light is "look here".
+            let waiting = sessions.filter { $0.state == .waiting }
+            let others  = sessions.filter { $0.state != .waiting }
 
-            for s in sessions {
-                let title = "\(s.state.emoji)  \(s.projectName)  —  \(s.shortId)"
-                menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+            if !waiting.isEmpty {
+                let header = NSMenuItem(title: "\(waiting.count) waiting for input", action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
+                for s in waiting {
+                    menu.addItem(NSMenuItem(title: "\(s.state.emoji)  \(s.projectName)  —  \(s.shortId)", action: nil, keyEquivalent: ""))
+                }
+                if !others.isEmpty { menu.addItem(.separator()) }
+            }
+
+            if !others.isEmpty {
+                let busyCount = others.filter { $0.state == .busy }.count
+                let idleCount = others.filter { $0.state == .idle }.count
+                let summary = "\(busyCount) busy · \(idleCount) idle"
+                let header = NSMenuItem(title: summary, action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
+                menu.addItem(.separator())
+                for s in others {
+                    menu.addItem(NSMenuItem(title: "\(s.state.emoji)  \(s.projectName)  —  \(s.shortId)", action: nil, keyEquivalent: ""))
+                }
             }
         }
 

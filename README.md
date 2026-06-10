@@ -10,7 +10,14 @@ A macOS menu bar traffic light for Claude Code — see your session state at a g
 
 ![demo](./demo.gif)
 
-The same hooks are used by every Claude Code client on this machine — the CLI, the VSCode extension, and the JetBrains plugins (IDEA, GoLand, PyCharm, …). The menu bar aggregates the highest-priority state across all sessions and the dropdown lists each one with its project name.
+The same hooks are used by every Claude Code client on this machine — the CLI, the VSCode extension, and the JetBrains plugins (IDEA, GoLand, PyCharm, …). Each session's state is tracked in its own file under `/tmp/cc-light/`, so sessions are independent; the menu bar icon is just an aggregate of the highest-priority state across them.
+
+The aggregate priority is **yellow > green > red**:
+- **🟡 waiting** — at least one session needs your input; the menu bar goes yellow
+- **🟢 idle** — otherwise, if any session is sitting idle, all clear
+- **🔴 busy** — every session is busy (Claude is working, no action needed from you)
+
+So if you're mid-edit in one project while another is asking for permission, the icon stays yellow until you handle the prompt — even if the first project is still grinding.
 
 ## Install
 
@@ -45,13 +52,21 @@ Claude Code hooks  ──►  cc-light-hook.sh <state>
 The menu shows e.g.:
 
 ```
-3 busy · 1 waiting · 0 idle
+2 waiting for input
 ─────────
-🔴  foo      —  abc12345
-🔴  bar      —  def67890
+🟡  foo      —  abc12345
+🟡  bar      —  def67890
+─────────
+1 busy · 2 idle
+─────────
 🔴  baz      —  ghi11111
-🟡  qux      —  jkl22222
+🟢  qux      —  jkl22222
+🟢  zap      —  mno33333
+─────────
+Quit                              ⌘Q
 ```
+
+Sessions in the `waiting` state are always listed first under their own header so you can see at a glance which project needs your input, even if other projects are busy or idle.
 
 ## Manual Setup
 
