@@ -2,25 +2,66 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="cc-light"
+# EXEC_NAME is the SwiftPM target's binary name. Must match the `name:`
+# of the executable target in Package.swift — swift build produces a
+# binary with this exact name in the build directory.
+EXEC_NAME="cc-light"
+# BUNDLE_NAME is the user-facing name shown in Finder / Activity Monitor
+# / Dock. The .app directory name, the renamed binary inside
+# Contents/MacOS, and CFBundleName / CFBundleDisplayName all come from
+# this. Using a space + capitalised form here is what makes the
+# installed app look polished in macOS UI.
+BUNDLE_NAME="CC Light"
 INSTALL_DIR="$HOME/Applications"
 HOOKS_DIR="$SCRIPT_DIR/hooks"
+ICON_FILE="$SCRIPT_DIR/cc-light-app/Resources/cc-light.icns"
 SETTINGS_FILE="$HOME/.claude/settings.json"
 STATE_DIR="/tmp/cc-light"
 
-echo "🚦 Installing cc-light..."
+echo "🚦 Installing $BUNDLE_NAME..."
 
 # 1. Build the Swift app
 echo "  → Building menu bar app..."
 cd "$SCRIPT_DIR/cc-light-app"
 swift build -c release 2>&1 | tail -3
-BUILD_PATH=$(swift build -c release --show-bin-path)/$APP_NAME
+BUILD_PATH=$(swift build -c release --show-bin-path)/$EXEC_NAME
 
 # 2. Create .app bundle
-APP_BUNDLE="$INSTALL_DIR/cc-light.app"
+APP_BUNDLE="$INSTALL_DIR/$BUNDLE_NAME.app"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
-cp "$BUILD_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
+# 2-pre. Migrate from a previous install at the old lowercase bundle
+#     name. We kill the old binary and remove the old directory so it
+#     doesn't keep showing up in Finder / Activity Monitor as a ghost.
+#     The pkill pattern matches both the old bundle path and the new
+#     one (which uses the renamed binary), since both contain the
+#     word "cc-light".
+OLD_APP_BUNDLE="$INSTALL_DIR/cc-light.app"
+if [ -d "$OLD_APP_BUNDLE" ] && [ "$OLD_APP_BUNDLE" != "$APP_BUNDLE" ]; then
+    pkill -f "cc-light" 2>/dev/null || true
+    rm -rf "$OLD_APP_BUNDLE"
+    echo "  → Removed old bundle $OLD_APP_BUNDLE"
+fi
+
+# Always nuke the existing MacOS/ contents — a previous install may
+# have left a stale `cc-light` binary behind from before we renamed
+# the in-bundle binary to $BUNDLE_NAME. Leaving it around means
+# Activity Monitor still shows the old name and Spotlight indexes a
+# ghost app.
+rm -f "$APP_BUNDLE/Contents/MacOS/"*
+
+# Copy the SwiftPM binary in as $BUNDLE_NAME (with space) so
+# Activity Monitor shows the user-facing name, not the SwiftPM target
+# name. CFBundleExecutable below points to it.
+cp "$BUILD_PATH" "$APP_BUNDLE/Contents/MacOS/$BUNDLE_NAME"
+
+# 2a. Drop the app icon into the bundle (if we have one). It's optional
+#     in the sense that the app runs fine without it, but it's expected
+#     to be present in source — build it with cc-light-app/Resources/build-icon.sh.
+if [ -f "$ICON_FILE" ]; then
+    cp "$ICON_FILE" "$APP_BUNDLE/Contents/Resources/cc-light.icns"
+fi
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,10 +69,14 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>$APP_NAME</string>
+    <string>$BUNDLE_NAME</string>
     <key>CFBundleIdentifier</key>
     <string>com.cc-light.app</string>
     <key>CFBundleName</key>
+    <string>$BUNDLE_NAME</string>
+    <key>CFBundleDisplayName</key>
+    <string>$BUNDLE_NAME</string>
+    <key>CFBundleIconFile</key>
     <string>cc-light</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
@@ -176,12 +221,19 @@ print(f"  → Wrote hooks to {settings_path}")
 PYEOF
 
 # 5. Launch
-echo "  → Launching cc-light..."
+#    Kill any previous instance first — `open` will reuse the running
+#    process if its bundle path is unchanged, which is fine in
+#    principle, but our binary name (and sometimes the bundle path)
+#    change between installs, and a stale process is harder to debug
+#    than a clean restart.
+pkill -f "CC Light.app/Contents/MacOS" 2>/dev/null || true
+pkill -f "cc-light.app/Contents/MacOS" 2>/dev/null || true
+echo "  → Launching $BUNDLE_NAME..."
 open "$APP_BUNDLE"
 
 echo ""
 echo "✅ Done! Look for the 🟢 in your menu bar."
-echo "   cc-light will turn 🔴 when Claude Code is working."
+echo "   $BUNDLE_NAME will turn 🔴 when Claude Code is working."
 echo ""
 echo "   Note: the same hooks fire for every Claude Code client on this"
 echo "   machine (CLI, VSCode extension, JetBrains plugins). The menu"

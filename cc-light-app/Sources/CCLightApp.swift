@@ -141,6 +141,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateMenu() {
         let menu = NSMenu()
 
+        // App identity header. Disabled (greyed) so it's clearly a label,
+        // not a clickable row. Bold weight sets it apart from session
+        // entries below.
+        let header = NSMenuItem(title: "CC Light", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        let headerFont = NSFontManager.shared.font(withFamily: ".AppleSystemUIFont", traits: .boldFontMask, weight: 6, size: 13)
+        if let font = headerFont {
+            header.attributedTitle = NSAttributedString(
+                string: "CC Light",
+                attributes: [.font: font]
+            )
+        }
+        menu.addItem(header)
+        menu.addItem(.separator())
+
         if sessions.isEmpty {
             menu.addItem(NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: ""))
         } else {
