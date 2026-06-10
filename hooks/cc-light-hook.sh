@@ -2,29 +2,49 @@
 # cc-light-hook.sh — Claude Code hook to update traffic light state
 # Usage: cc-light-hook.sh <state>
 # States: busy, waiting, idle
+#
+# Reads Claude Code's hook input (JSON on stdin) and writes a per-session
+# state file to /tmp/cc-light/<session_id>.json containing the state, the
+# session id, the working directory, and the transcript path. The Swift
+# menu bar app reads these files to drive the traffic light.
 
+set -e
 STATE_DIR="/tmp/cc-light"
 STATE="${1:-idle}"
-
 mkdir -p "$STATE_DIR"
 
-# Read session_id from stdin if available
-SESSION_ID=""
-if [ -t 0 ]; then
-  : # no stdin
-else
+# Capture stdin (Claude Code hook input JSON) so we can pass it to python
+INPUT=""
+if [ ! -t 0 ]; then
   INPUT=$(cat)
-  SESSION_ID=$(echo "$INPUT" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"' -f4)
 fi
 
-# Write per-session state file
-if [ -n "$SESSION_ID" ]; then
-  cat > "$STATE_DIR/${SESSION_ID}.json" <<EOF
-{"state":"${STATE}","session_id":"${SESSION_ID}","ts":$(date +%s)}
-EOF
-else
-  # Fallback: write to default if no session_id
-  cat > "$STATE_DIR/_default.json" <<EOF
-{"state":"${STATE}","session_id":"","ts":$(date +%s)}
-EOF
-fi
+python3 - "$STATE" "$STATE_DIR" "$INPUT" <<'PYEOF'
+import json, os, sys, time
+
+state_arg  = sys.argv[1]
+state_dir  = sys.argv[2]
+hook_json  = sys.argv[3] or ""
+
+try:
+    hook_input = json.loads(hook_json) if hook_json.strip() else {}
+except Exception:
+    hook_input = {}
+
+session_id     = hook_input.get("session_id") or ""
+cwd            = hook_input.get("cwd") or ""
+transcript     = hook_input.get("transcript_path") or ""
+
+key = session_id or "_default"
+state = {
+    "state":           state_arg,
+    "session_id":      session_id,
+    "cwd":             cwd,
+    "transcript_path": transcript,
+    "ts":              int(time.time()),
+}
+
+path = os.path.join(state_dir, key + ".json")
+with open(path, "w") as f:
+    json.dump(state, f)
+PYEOF
