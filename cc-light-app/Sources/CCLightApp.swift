@@ -66,6 +66,26 @@ struct SessionState: Codable {
         guard let cwd = cwd, !cwd.isEmpty else { return "(no cwd)" }
         return (cwd as NSString).lastPathComponent
     }
+
+    /// Background sessions run on their own schedule and churn busy↔idle
+    /// every few seconds (e.g. claude-mem's observer wakes ~every 20s,
+    /// fires a single PreToolUse → busy then Stop → idle within the same
+    /// second). Their "idle" is the normal state, not an actionable
+    /// signal the user should respond to. They show in their own menu
+    /// section but are excluded from the menu-bar icon aggregation —
+    /// otherwise they'd drag the icon green every ~20s and mask whatever
+    /// the foreground project sessions are actually doing.
+    ///
+    /// Matched by substring on cwd. Add a new pattern here if another
+    /// background-session type appears.
+    var isBackground: Bool {
+        guard let cwd = cwd, !cwd.isEmpty else { return false }
+        return SessionState.backgroundCwdPatterns.contains { cwd.contains($0) }
+    }
+
+    private static let backgroundCwdPatterns: [String] = [
+        ".claude-mem/observer-sessions",
+    ]
 }
 
 // MARK: - App Delegate
@@ -128,9 +148,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return $0.projectName < $1.projectName
         }
 
-        // Aggregate: pick the highest-priority state across all sessions.
+        // Aggregate: pick the highest-priority state across all *foreground*
+        // sessions. Background sessions (see SessionState.isBackground) are
+        // intentionally excluded — they cycle idle every ~20s and would
+        // otherwise drag the icon green whenever they happen to be in their
+        // idle phase, masking what the actual project sessions are doing.
         // Empty → idle (green). All busy → busy (red). Any waiting* → yellow.
-        let agg: CCState = sessions.map { $0.state }.max(by: { $0.priority < $1.priority }) ?? .idle
+        let agg: CCState = sessions
+            .filter { !$0.isBackground }
+            .map { $0.state }
+            .max(by: { $0.priority < $1.priority }) ?? .idle
 
         DispatchQueue.main.async {
             self.statusItem.button?.title = agg.menuBarEmoji
@@ -159,15 +186,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if sessions.isEmpty {
             menu.addItem(NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: ""))
         } else {
-            // Three sections, top-down:
+            // Four sections, top-down:
             //   1. waiting-for-permission  — most urgent (locks you out of work)
             //   2. waiting-for-input       — Claude is idle, needs your prompt
-            //   3. busy/idle               — no action required
+            //   3. busy/idle foreground    — your actual project sessions
+            //   4. background              — claude-mem observer & friends;
+            //                                excluded from the icon aggregation
+            //                                so their constant idle churn doesn't
+            //                                drag the menu bar green
             let waitingPermission = sessions.filter { $0.state == .waitingPermission }
             let waitingInput      = sessions.filter { $0.state == .waitingInput }
-            let others            = sessions.filter {
+            let foregroundOthers  = sessions.filter {
                 $0.state != .waitingPermission && $0.state != .waitingInput
+                    && !$0.isBackground
             }
+            let background        = sessions.filter { $0.isBackground }
 
             func addSection(_ items: [SessionState], header: String, renderEmoji: Bool) {
                 guard !items.isEmpty else { return }
@@ -191,11 +224,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                        header: "\(waitingInput.count) waiting for input",
                        renderEmoji: true)
 
-            if !others.isEmpty {
-                let busyCount = others.filter { $0.state == .busy }.count
-                let idleCount = others.filter { $0.state == .idle }.count
-                addSection(others,
+            if !foregroundOthers.isEmpty {
+                let busyCount = foregroundOthers.filter { $0.state == .busy }.count
+                let idleCount = foregroundOthers.filter { $0.state == .idle }.count
+                addSection(foregroundOthers,
                            header: "\(busyCount) busy · \(idleCount) idle",
+                           renderEmoji: true)
+            }
+
+            // Background section last, with an explicit "ignored" note so
+            // it's clear these don't affect the menu-bar icon color.
+            if !background.isEmpty {
+                addSection(background,
+                           header: "\(background.count) background · ignored",
                            renderEmoji: true)
             }
         }
